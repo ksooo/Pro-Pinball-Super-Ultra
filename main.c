@@ -39,10 +39,16 @@ static void* set_digital_nudge_acceleration_multipliers = 0x1000bf0af;
 static float* digital_nudge_x_acceleration_multiplier = 0x10035c688;
 static float* digital_nudge_y_acceleration_multiplier = 0x10035c68c;
 
+static void* __ingame_ui = 0x100354808; // Anonymous, but pointer to INGAME_UI
+static float* __resume_timer_duration = 0x1001a0ba8; // Anonymous, time in seconds the game remains paused when leaving menu
+
+static void unprotect(void* ptr, size_t size) {
+  mprotect((void*)((uintptr_t)ptr & ~0xFFF), (size + 0xFFF) & ~0xFFF, PROT_WRITE | PROT_EXEC | PROT_READ);
+}
 
 static void install_detour(void* at, void* function) {
   uint64_t detour_address = (uint64_t)at;
-  mprotect(detour_address & ~0xFFF, 0x2000, PROT_WRITE | PROT_EXEC | PROT_READ);
+  unprotect(at, 12);
   *(uint8_t *)(detour_address + 0) = 0x48;
   *(uint8_t *)(detour_address + 1) = 0xB8;
   *(uint64_t *)(detour_address + 2) = (uint64_t)function;
@@ -382,4 +388,9 @@ __attribute__((constructor)) void inject(void) {
     install_detour(hw_input_state, hw_input_state_hook);
     install_detour(set_digital_nudge_acceleration_multipliers, set_digital_nudge_acceleration_multipliers_hook);
   } 
+
+  // Shorter resume time when returning from menu
+  //FIXME: Could also multiply the value at 0x100052572 to get the 3,2,1 back
+  unprotect(__resume_timer_duration, 4);
+  *__resume_timer_duration = 1.0f;
 }
