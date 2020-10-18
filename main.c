@@ -10,6 +10,8 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+#include <SDL.h>
+
 static FT_Library library;
 
 typedef int ETextAlign;
@@ -29,6 +31,25 @@ static void* CCImage_initWithString = 0x10013f48a;
 static void *(*cpp_new)(unsigned long size) = 0x10019f2f4; // operator new[](unsigned long)
 static void (*cpp_delete)(void *ptr) = 0x10019f2e8; // operator delete[](void*)
 
+static uint8_t hw_input_state_original[12];
+static uint64_t (*hw_input_state)(void) = 0x100074b05;
+
+static void* set_digital_nudge_acceleration_multipliers = 0x1000bf0af;
+
+static float* digital_nudge_x_acceleration_multiplier = 0x10035c688;
+static float* digital_nudge_y_acceleration_multiplier = 0x10035c68c;
+
+
+static void install_detour(void* at, void* function) {
+  uint64_t detour_address = (uint64_t)at;
+  mprotect(detour_address & ~0xFFF, 0x2000, PROT_WRITE | PROT_EXEC | PROT_READ);
+  *(uint8_t *)(detour_address + 0) = 0x48;
+  *(uint8_t *)(detour_address + 1) = 0xB8;
+  *(uint64_t *)(detour_address + 2) = (uint64_t)function;
+  *(uint8_t *)(detour_address + 10) = 0xFF;
+  *(uint8_t *)(detour_address + 11) = 0xE0;
+}
+
 unsigned int pot(unsigned int v) {
   assert(v != 0);
   unsigned int r = 1;
@@ -40,6 +61,85 @@ unsigned int pot(unsigned int v) {
 
 unsigned int max(unsigned int a, unsigned int b) {
   return (a > b) ? a : b;
+}
+
+
+static SDL_GameController *controller = NULL;
+
+// These are the bits for the return value of hw_input_state
+enum {
+  HwInputLeftFlipper = 0x1,
+  HwInputRightFlipper = 0x2,
+  
+  HwInputLaunch = 0x4,
+  HwInputStart = 0x8,
+  HwInputMagnosave = 0x20,
+  
+  HwInputNudgeUp = 0x40, 
+  HwInputNudgeLeft = 0x80,
+  HwInputNudgeRight = 0x100,
+  
+  HwInputPause = 0x200,
+  
+  HwInputOperatorRight = 0x1000,
+  HwInputOperatorLeft = 0x2000,
+  HwInputOperatorDown = 0x4000,
+  HwInputOperatorUp = 0x8000
+} HwInput;
+
+//FIXME: Listen for events so we don't drop any short presses in low-FPS?
+static uint64_t hw_input_state_hook(void) {
+  // Revert patch to the original function
+  memcpy(hw_input_state, hw_input_state_original, sizeof(hw_input_state_original));
+  
+  // Call the original function
+  uint64_t state_original = hw_input_state();
+  printf("Original hw_input_state returned 0x%016" PRIX64 "\n", state_original);
+  
+  // Re-apply patch for later
+  install_detour(hw_input_state, hw_input_state_hook);
+
+  // Get SDL input
+  SDL_GameControllerUpdate();
+  
+  uint64_t state = 0;
+  
+  Sint16 lt = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+  Sint16 rt = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+
+  if (lt > 0x1000) { state |= HwInputLeftFlipper; }
+  if (rt > 0x1000) { state |= HwInputRightFlipper; }
+
+  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A)) { state |= HwInputLaunch; }
+  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_START)) { state |= HwInputStart; }
+  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) { state |= HwInputMagnosave; }
+  
+  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_BACK)) { state |= HwInputPause; }
+  
+  Sint16 nx = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
+  Sint16 ny = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
+  
+  if (nx < -0x6000) { state |= HwInputNudgeLeft; }
+  if (nx > +0x6000) { state |= HwInputNudgeRight; }
+  
+  if (ny < -0x6000) { state |= HwInputNudgeUp; }
+  if (ny > +0x6000) { state |= HwInputNudgeUp; }
+
+  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) { state |= HwInputOperatorRight; }
+  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) { state |= HwInputOperatorLeft; }
+  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) { state |= HwInputOperatorDown; }
+  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_UP)) { state |= HwInputOperatorUp; }
+  
+  printf("Hook adds 0x%016" PRIX64 "\n", state);
+  
+  return state_original | state;
+}
+
+static void set_digital_nudge_acceleration_multipliers_hook(float x, float y) {
+  // This function doesn't really impact the nudge very much; nudge strength mostly depends on length of a nudge
+  printf("Game wanted to set nudge to %f, %f\n", x, y);
+  *digital_nudge_x_acceleration_multiplier = 1.0f;
+  *digital_nudge_y_acceleration_multiplier = 1.0f;
 }
 
 // Reimplementation of cocos2dx 2.6.6 CCImage::initWithString (platform/CCImage.h) MacOS backend
@@ -230,16 +330,6 @@ error = FT_Set_Char_Size(
   return true;
 }
 
-static void install_detour(void* at, void* function) {
-  uint64_t detour_address = (uint64_t)at;
-  mprotect(detour_address & ~0xFFF, 0x2000, PROT_WRITE | PROT_EXEC | PROT_READ);
-  *(uint8_t *)(detour_address + 0) = 0x48;
-  *(uint8_t *)(detour_address + 1) = 0xB8;
-  *(uint64_t *)(detour_address + 2) = (uint64_t)function;
-  *(uint8_t *)(detour_address + 10) = 0xFF;
-  *(uint8_t *)(detour_address + 11) = 0xE0;
-}
-
 __attribute__((constructor)) void inject(void) {
   if (*(unsigned long long *)0x10013fbb6 != 0x4589480005f739e8) {
     printf("Couldn't find Pro Pinball?!\n");
@@ -253,5 +343,43 @@ __attribute__((constructor)) void inject(void) {
   }
   // FIXME: Do FT_Done_FreeType( library ); in destructor?
   
+  // We also want gamepad input, even if our soon-to-be-created SDL window isn't in focus
+  SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    
+  // Initialize SDL
+  if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS|SDL_INIT_GAMECONTROLLER|SDL_INIT_HAPTIC) != 0) {
+    SDL_Log("Unable to initialize SDL: %s", SDL_GetError());
+  }
+
+  // Some SDL features need a window, so we create a hidden one
+  //FIXME: Repurpose for configuration?
+  SDL_Window* window = SDL_CreateWindow(
+    "Pro Pinball Super-Ultra",
+    SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+    10, 10,
+    SDL_WINDOW_HIDDEN
+  );
+
+  // Open the first available controller
+  for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+    if (SDL_IsGameController(i)) {
+      controller = SDL_GameControllerOpen(i);
+      if (controller) {
+        printf("Controller '%s' opened!\n", SDL_GameControllerName(controller));
+        break;
+      } else {
+        fprintf(stderr, "Could not open gamecontroller %i: %s\n", i, SDL_GetError());
+      }
+    }
+  }
+  
+  // Fix broken text rendering
   install_detour(CCImage_initWithString, CCImage_initWithString_hook);
+  
+  // Support gamepad
+  if (controller) {
+    memcpy(hw_input_state_original, hw_input_state, sizeof(hw_input_state_original));
+    install_detour(hw_input_state, hw_input_state_hook);
+    install_detour(set_digital_nudge_acceleration_multipliers, set_digital_nudge_acceleration_multipliers_hook);
+  } 
 }
