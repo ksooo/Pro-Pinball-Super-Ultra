@@ -141,11 +141,213 @@ static uint64_t hw_input_state_hook(void) {
   return state_original | state;
 }
 
+ 
+typedef struct {
+  int32_t x;
+  int32_t y;
+} Location;
+
+
+
+typedef struct {
+  // 1 = playfield
+  // 2 = drain
+  // 4 = ball through? [before start of game?]
+  // ...
+  // 13 = ball through?
+  // 14 = crystal before being rejected (during mount rushmore)
+  // 15 = crystal
+  // 16 = back of orbit / sideramp / continent start
+  // 17 = drop to bumpers? (happens for brief moment after 16)
+  // 18 = regular lock (bottom?)
+  // 19 = regular lock (center?)
+  // ...
+  // 25 = arm to lock
+  uint32_t layer; // [0] Location of ball
+
+  
+  uint32_t unk4; // [1] Some timer / counter
+  
+  uint32_t unk8; // [2]
+  
+  uint32_t unkC; // [3] Some timer / counter since ball idle?
+  
+  int32_t pos_x; // [4]
+  int32_t pos_y; // [5]
+  int32_t pos_z; // [6]
+  int32_t pos_z_second; // [7]
+  
+  int32_t vel_x; // [8]
+  int32_t vel_y; // [9]
+  
+  uint32_t unk28; // [10]
+  uint32_t unk2C; // [11]
+  uint32_t unk30; // [12]
+  uint32_t unk34; // [13]
+  uint32_t unk38; // [14]
+  uint32_t unk3C; // [15]
+  uint32_t unk40; // [16]
+  
+  // 0 = playfield
+  // 1 = lower ramp
+  // 2 = lower left habitrail?
+  // 3 = higher ramps
+  uint32_t z_level; // [17]
+  
+  // 0 = on playfield
+  // 1 = falling / gravity
+  // 2 = held / no gravity
+  uint32_t unk48; // [18] Falling state?
+  
+  // 0 = nothing
+  // 1 = rubber
+  // 4 = inlane
+  // 6 = ramps
+  // 7 = habitrails
+  uint32_t unk4C; // [19] Wall collision type
+  
+  uint32_t unk50; // [20]
+  uint32_t unk54; // [21]
+  uint32_t unk58; // [22]
+  uint32_t unk5C; // [23]
+  uint32_t unk60; // [24]
+  uint32_t unk64; // [25]
+  uint32_t unk68; // [26]
+  uint32_t unk6C; // [27]
+  uint32_t unk70; // [28]
+  
+  // Probably rotation and spin
+  float unk74; // [29]
+  float unk78; // [30]
+  float unk7C; // [31]
+  float unk80; // [32]
+  float unk84; // [33]
+  
+  uint32_t unk88; // [34] Some index?
+} Ball;
+
+
+
+uint8_t ball_mov[6*4];
+
+static void shoot(Ball* ball, Location* from, Location* to, float speed) {
+  float f = 0.1f;
+  float eps = 1.0e-5f;
+  float from_x = from->x * f;
+  float from_y = from->y * f;
+  float to_x = to->x * f;
+  float to_y = to->y * f;
+  float delta_x = to_x - from_x;
+  float delta_y = to_y - from_y;
+  
+  printf("delta is %f %f\n", delta_x, delta_y);  
+  
+  float delta_sl = delta_x * delta_x + delta_y * delta_y;
+  if (delta_sl > eps) {
+    float delta_l = sqrtf(delta_sl);
+    delta_x = delta_x / delta_l * speed;
+    delta_y = delta_y / delta_l * speed;
+  }
+  
+  printf("normalized delta is %f %f\n", delta_x, delta_y);  
+  
+  //FIXME: Assert that ball is on playfield?
+  ball->layer = 1;
+  ball->pos_x = from->x;
+  ball->pos_y = from->y;
+  ball->pos_z = 0;
+  ball->pos_z_second = ball->pos_z;
+  ball->vel_x = delta_x / f;
+  ball->vel_y = delta_y / f;
+  ball->z_level = 0;
+}
+
 static void set_digital_nudge_acceleration_multipliers_hook(float x, float y) {
   // This function doesn't really impact the nudge very much; nudge strength mostly depends on length of a nudge
+#if 0
   printf("Game wanted to set nudge to %f, %f\n", x, y);
+#endif
   *digital_nudge_x_acceleration_multiplier = 1.0f;
   *digital_nudge_y_acceleration_multiplier = 1.0f;
+  
+  
+  SDL_PumpEvents();
+  Uint8* s = SDL_GetKeyboardState(NULL);
+  
+  
+  int* acs = 0x100388780;
+  uint32_t* balls = 0x1003887b0; // off-by-4? - we'll display one more just to be safe
+  int ac = *acs; // Get first ball from active ball table
+  
+  
+  Ball* ball = &balls[0x8c / 4 * ac];
+   
+  Location right_flipper = { 12845067, 7758857 };
+  Location right_upper_flipper = { 17229452, 21452418 };
+  Location left_flipper = { 7208987, 7758864 };
+    
+  Location right_orbit = { 17767282, 23165143 };
+
+  Location right_ramp = { 15629877, 23814211 };
+
+  Location crystal = { 10076926, 28030764 };
+
+
+  Location center_ramp = { 6532203, 31295397 };
+
+  Location left_ramp = { 5549541, 21263751 };
+  Location left_orbit = { 3609768, 20051757 };
+
+
+  Location sideramp = { 6732304, 27471462 };
+
+
+  if (s[SDL_SCANCODE_1]) {
+    printf("Shooting left orbit\n");
+    shoot(ball, &right_flipper, &left_orbit, 2000000.0f);
+  }
+  if (s[SDL_SCANCODE_2]) {
+    printf("Shooting left ramp\n");
+    shoot(ball, &right_flipper, &left_ramp, 2000000.0f);
+  }
+  if (s[SDL_SCANCODE_3]) {
+    printf("Shooting sideramp\n");
+    shoot(ball, &right_upper_flipper, &sideramp, 2000000.0f);
+  }
+  if (s[SDL_SCANCODE_4]) {
+    printf("Shooting center ramp\n");
+    shoot(ball, &right_flipper, &center_ramp, 2000000.0f);
+  }
+  if (s[SDL_SCANCODE_5]) {
+    printf("Shooting crystal\n");
+    shoot(ball, &left_flipper, &crystal, 2000000.0f);
+  }
+  if (s[SDL_SCANCODE_6]) {
+    printf("Shooting right ramp\n");
+    shoot(ball, &left_flipper, &right_ramp, 2000000.0f);
+  }
+  if (s[SDL_SCANCODE_7]) {
+    printf("Shooting right orbit\n");
+    shoot(ball, &left_flipper, &right_orbit, 2000000.0f);
+  }
+ 
+ 
+  if (s[SDL_SCANCODE_N]) {
+    printf("Location stored = { %d, %d };\n", ball->pos_x, ball->pos_y);
+    memcpy(ball_mov, &balls[0x8c / 4 * ac + 4], sizeof(ball_mov));
+  }
+  if (s[SDL_SCANCODE_M]) {
+    printf("loaded\n");
+    memcpy(&balls[0x8c / 4 * ac + 4], ball_mov, sizeof(ball_mov));
+  }
+
+  if (s[SDL_SCANCODE_D]) {
+    for(int i = 0; i < 0x8c / 4 + 1; i++) {
+      int32_t v = balls[0x8C / 4 * ac + i];
+      printf("[%d] 0x%08X; %d; %f\n", i, (uint32_t)v, v, *(float*)&v);
+    }
+  }
+
 }
 
 // Reimplementation of cocos2dx 2.6.6 CCImage::initWithString (platform/CCImage.h) MacOS backend
@@ -386,8 +588,10 @@ __attribute__((constructor)) void inject(void) {
   if (controller) {
     memcpy(hw_input_state_original, hw_input_state, sizeof(hw_input_state_original));
     install_detour(hw_input_state, hw_input_state_hook);
-    install_detour(set_digital_nudge_acceleration_multipliers, set_digital_nudge_acceleration_multipliers_hook);
-  } 
+  }
+  
+  // Hook the nudge function, which also handles auto-shot
+  install_detour(set_digital_nudge_acceleration_multipliers, set_digital_nudge_acceleration_multipliers_hook);
 
   // Shorter resume time when returning from menu
   //FIXME: Could also multiply the value at 0x100052572 to get the 3,2,1 back
