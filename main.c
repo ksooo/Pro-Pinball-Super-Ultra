@@ -69,6 +69,14 @@ unsigned int max(unsigned int a, unsigned int b) {
   return (a > b) ? a : b;
 }
 
+void(*bloop)(int param_1) = 0x1000931a9;
+
+
+// Not sure if the game has a function for this, so I wrote my own
+static void insert_coin() {
+  *(int32_t*)0x100384ad4 += 1;
+  bloop(0);
+}
 
 static SDL_GameController *controller = NULL;
 
@@ -100,44 +108,63 @@ static uint64_t hw_input_state_hook(void) {
   
   // Call the original function
   uint64_t state_original = hw_input_state();
+#if 0
   printf("Original hw_input_state returned 0x%016" PRIX64 "\n", state_original);
+#endif
   
   // Re-apply patch for later
   install_detour(hw_input_state, hw_input_state_hook);
 
   // Get SDL input
+  SDL_PumpEvents();
+  Uint8* s = SDL_GetKeyboardState(NULL);
   SDL_GameControllerUpdate();
   
   uint64_t state = 0;
   
-  Sint16 lt = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
-  Sint16 rt = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+  static bool insert_coin_held = true;
+  if (s[SDL_SCANCODE_C]) {
+    if (!insert_coin_held) {
+      printf("Inserting coin\n");
+      insert_coin();
+    }
+    insert_coin_held = true;
+  } else {
+    insert_coin_held = false;
+  }
 
-  if (lt > 0x1000) { state |= HwInputLeftFlipper; }
-  if (rt > 0x1000) { state |= HwInputRightFlipper; }
+  if (controller) {
+    Sint16 lt = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+    Sint16 rt = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
 
-  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A)) { state |= HwInputLaunch; }
-  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_START)) { state |= HwInputStart; }
-  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) { state |= HwInputMagnosave; }
-  
-  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_BACK)) { state |= HwInputPause; }
-  
-  Sint16 nx = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
-  Sint16 ny = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
-  
-  if (nx < -0x6000) { state |= HwInputNudgeLeft; }
-  if (nx > +0x6000) { state |= HwInputNudgeRight; }
-  
-  if (ny < -0x6000) { state |= HwInputNudgeUp; }
-  if (ny > +0x6000) { state |= HwInputNudgeUp; }
+    if (lt > 0x1000) { state |= HwInputLeftFlipper; }
+    if (rt > 0x1000) { state |= HwInputRightFlipper; }
 
-  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) { state |= HwInputOperatorRight; }
-  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) { state |= HwInputOperatorLeft; }
-  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) { state |= HwInputOperatorDown; }
-  if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_UP)) { state |= HwInputOperatorUp; }
+    if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A)) { state |= HwInputLaunch; }
+    if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_START)) { state |= HwInputStart; }
+    if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) { state |= HwInputMagnosave; }
+    
+    if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_BACK)) { state |= HwInputPause; }
+    
+    Sint16 nx = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
+    Sint16 ny = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
+    
+    if (nx < -0x6000) { state |= HwInputNudgeLeft; }
+    if (nx > +0x6000) { state |= HwInputNudgeRight; }
+    
+    if (ny < -0x6000) { state |= HwInputNudgeUp; }
+    if (ny > +0x6000) { state |= HwInputNudgeUp; }
+
+    if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) { state |= HwInputOperatorRight; }
+    if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) { state |= HwInputOperatorLeft; }
+    if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) { state |= HwInputOperatorDown; }
+    if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_UP)) { state |= HwInputOperatorUp; }
+  }
   
+#if 0    
   printf("Hook adds 0x%016" PRIX64 "\n", state);
-  
+#endif
+
   return state_original | state;
 }
 
@@ -152,6 +179,7 @@ typedef struct {
 typedef struct {
   // 1 = playfield
   // 2 = drain
+  // 3 = ball through? [while forcing ball into it?]
   // 4 = ball through? [before start of game?]
   // ...
   // 13 = ball through?
@@ -585,10 +613,8 @@ __attribute__((constructor)) void inject(void) {
   install_detour(CCImage_initWithString, CCImage_initWithString_hook);
   
   // Support gamepad
-  if (controller) {
-    memcpy(hw_input_state_original, hw_input_state, sizeof(hw_input_state_original));
-    install_detour(hw_input_state, hw_input_state_hook);
-  }
+  memcpy(hw_input_state_original, hw_input_state, sizeof(hw_input_state_original));
+  install_detour(hw_input_state, hw_input_state_hook);
   
   // Hook the nudge function, which also handles auto-shot
   install_detour(set_digital_nudge_acceleration_multipliers, set_digital_nudge_acceleration_multipliers_hook);
