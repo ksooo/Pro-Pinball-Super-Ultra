@@ -46,7 +46,7 @@ static void unprotect(void* ptr, size_t size) {
   mprotect((void*)((uintptr_t)ptr & ~0xFFF), (size + 0xFFF) & ~0xFFF, PROT_WRITE | PROT_EXEC | PROT_READ);
 }
 
-static void install_detour(void* at, void* function) {
+static void* install_detour(void* at, void* function) {
   uint64_t detour_address = (uint64_t)at;
   unprotect(at, 12);
   *(uint8_t *)(detour_address + 0) = 0x48;
@@ -54,6 +54,14 @@ static void install_detour(void* at, void* function) {
   *(uint64_t *)(detour_address + 2) = (uint64_t)function;
   *(uint8_t *)(detour_address + 10) = 0xFF;
   *(uint8_t *)(detour_address + 11) = 0xE0;
+  return detour_address + 12;
+}
+
+static void* install_detour_call(void* at, void* function) {
+  uint64_t detour_address = (uint64_t)at;
+  install_detour(at, function);
+  *(uint8_t *)(detour_address + 11) = 0xD0;
+  return detour_address + 12;
 }
 
 unsigned int pot(unsigned int v) {
@@ -566,6 +574,94 @@ error = FT_Set_Char_Size(
   return true;
 }
 
+
+static int32_t* _operator_flippers_enabled = 0x10037bcbc;
+static int32_t* _input = 0x10037acc8;
+static int32_t* _swap_flippers = 0x10037bd58;
+static int32_t* _flippers_active = 0x10037bd34;
+
+static uint8_t* lower_left_power = 0x100388fec; // Not game name
+static uint8_t* lower_right_power = 0x1003890b0; // Not game name
+static uint8_t* upper_right_power = 0x100389174; // Not game name
+
+static uint8_t* lower_left_eos = 0x100389bfc; // Not game name
+static uint8_t* lower_right_eos = 0x100389c00;  // Not game name
+static uint8_t* upper_right_eos = 0x100389c08;  // Not game name
+
+#define RESET(prefix) \
+  { \
+    prefix ## _power[0] = 0; \
+    prefix ## _power[1] = 0; \
+  }
+#define ACTIVATE(prefix) \
+  { \
+    prefix ## _power[0] = (*prefix ## _eos == 0) ? 1 : 0; \
+    prefix ## _power[1] = 1; \
+  }
+#define PREPARE() \
+  SDL_GameControllerUpdate(); \
+  \
+  Sint16 lt = controller ? SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT ) : 0; \
+  Sint16 rt = controller ? SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT ) : 0; \
+  \
+  bool lower_left_button = (*_input & 1) || (lt > 0x1000); \
+  bool lower_right_button = (*_input & 2) || (rt > 0x1000); \
+  bool upper_right_button = ((rt <= 0x1000) && (*_input & 2)) || (rt > 0x4000);
+
+
+// Used in operator menu
+static void poll_high_frequency_logic_patch1() {
+  if (*_operator_flippers_enabled != 0) {
+
+    PREPARE()
+  
+    RESET(lower_left)
+    RESET(lower_right)
+    RESET(upper_right)
+
+    if (lower_left_button) { ACTIVATE(lower_left); }
+    if (lower_right_button) { ACTIVATE(lower_right); }
+    if (upper_right_button) { ACTIVATE(upper_right); }
+    
+  }    
+}
+
+// Used during normal play
+static void poll_high_frequency_logic_patch2() {
+  RESET(lower_left)
+  RESET(lower_right)
+  RESET(upper_right)
+
+  if (*_flippers_active != 0) {
+  
+    PREPARE()
+  
+    // Lower left
+    if (lower_left_button) {
+      if (*_swap_flippers == 0) {
+        ACTIVATE(lower_left)
+      } else {
+        ACTIVATE(lower_right)
+      }
+    }
+    
+    // Lower right
+    if (lower_right_button) {
+      if (*_swap_flippers == 0) {
+        ACTIVATE(lower_right)
+      } else {
+        ACTIVATE(lower_left)
+      }    
+    }
+    
+    // Upper right (not modified)
+    if (upper_right_button) {
+      ACTIVATE(upper_right);
+    }
+  }
+}
+
+
 __attribute__((constructor)) void inject(void) {
   if (*(unsigned long long *)0x10013fbb6 != 0x4589480005f739e8) {
     printf("Couldn't find Pro Pinball?!\n");
@@ -623,4 +719,47 @@ __attribute__((constructor)) void inject(void) {
   //FIXME: Could also multiply the value at 0x100052572 to get the 3,2,1 back
   unprotect(__resume_timer_duration, 4);
   *__resume_timer_duration = 1.0f;
+  
+#if 0
+  // disable high freq logic
+  install_detour(0x10009c558, NULL);
+  *(uint8_t*)0x10009c558 = 0xC3;
+#endif
+  
+  // Replace with patch for flipper finger staging
+  {
+    uint8_t* from = 0x10009c576;
+    unprotect(from, 0x1000);
+    *from++ = 0x41; *from++ = 0x57; // push r15
+    
+            *from++ = 0x50; // push rax [stack align]
+    from = install_detour_call(from, poll_high_frequency_logic_patch1);
+            *from++ = 0x58; // pop rax [stack align]
+    
+    *from++ = 0x41; *from++ = 0x5F; // pop r15
+    from = install_detour(from, 0x10009c6a2);    
+  }
+  
+  // Replace with patch for flipper finger staging
+  {
+    uint8_t* from = 0x10009c5ef;
+    unprotect(from, 0x1000);
+    *from++ = 0x41; *from++ = 0x57; // push r15
+        
+        *from++ = 0x50; // push rax [stack align]
+        
+        
+    *from++ = 0x50; // push rax
+    *from++ = 0x51; // push rcx    
+    from = install_detour_call(from, poll_high_frequency_logic_patch2);
+    *from++ = 0x59; // pop rcx
+    *from++ = 0x58; // pop rax
+    
+        *from++ = 0x58; // pop rax [stack align]
+    
+    *from++ = 0x41; *from++ = 0x5F; // pop r15
+    install_detour(from, 0x10009c76c);
+  }
+  
+
 }
