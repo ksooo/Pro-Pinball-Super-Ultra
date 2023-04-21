@@ -25,6 +25,19 @@ You can find the [base-game download links in the wiki](https://github.com/JayFo
 
 ### macOS
 
+One time, remove ASLR from pinball binary, otherwise this will only work in debugger:
+
+```
+chmod +x ./change_mach_o_flags.py 
+./change_mach_o_flags.py --no-pie /Applications/Pro\ Pinball.app/Contents/MacOS/Pro\ Pinball
+```
+
+One time, install build dependencies:
+
+```
+brew install freetype
+```
+
 Building:
 
 ```
@@ -49,7 +62,7 @@ make && DYLD_INSERT_LIBRARIES="`pwd`/libhook.dylib" DYLD_FRAMEWORK_PATH="$APITRA
 For playing:
 
 ```
-DYLD_INSERT_LIBRARIES="`pwd`/libhook.dylib" /Applications/Pro\ Pinball.app/Contents/MacOS/Pro\ Pinball
+DYLD_INSERT_LIBRARIES="`pwd`/libhook.dylib" /Applications/Pro\ Pinball.app/Contents/MacOS/Pro\ Pinball q
 ```
 
 
